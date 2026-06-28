@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MedBioChem PRO</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+body{font-family:'Inter',sans-serif;background:#f0f4ff;min-height:100vh;}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.anim{animation:slideUp .35s cubic-bezier(.16,1,.3,1) both}
+@keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(99,102,241,.45)}70%{box-shadow:0 0 0 12px rgba(99,102,241,0)}100%{box-shadow:0 0 0 0 rgba(99,102,241,0)}}
+.pulse{animation:pulse-ring 1.8s infinite}
+
+.cat-cb:not(:checked)+label{opacity:.5;filter:grayscale(.8);border-style:dashed;transform:scale(.98)}
+.cat-cb:checked+label{opacity:1;filter:none;border-style:solid;transform:scale(1);box-shadow:0 4px 12px -3px rgba(0,0,0,.1)}
+.cat-cb+label{transition:all .25s ease}
+.scrollbar-hide::-webkit-scrollbar{display:none}
+.scrollbar-hide{-ms-overflow-style:none;scrollbar-width:none}
+.rich strong{font-weight:700}
+.rich em{font-style:italic}
+.rich p{margin-bottom:.5rem}
+.rich p:last-child{margin-bottom:0}
+.rich ul{list-style:disc;padding-left:1.5rem;margin-bottom:.5rem}
+.rich li{margin-bottom:.2rem}
+
+.schema-wrap{width:100%;overflow-x:auto;border-radius:.75rem;background:#fff;border:1px solid #e2e8f0;padding:1rem}
+.schema-wrap svg{display:block;margin:auto;max-width:100%;height:auto}
+.tab-btn{padding:.5rem 1rem;font-size:13px;font-weight:700;border-radius:.5rem;transition:all .15s}
+.tab-btn.active{background:#4f46e5;color:#fff;box-shadow:0 2px 6px rgba(79,70,229,.3)}
+.tab-btn:not(.active){background:#f1f5f9;color:#475569}
+</style>
+</head>
+<body class="text-slate-800 pb-16 overflow-x-hidden selection:bg-indigo-200 selection:text-indigo-900 text-[13px]">
+<div id="app" class="w-full min-h-screen flex flex-col max-w-4xl mx-auto"></div>
+<script>
+const GEMINI_MODEL = 'gemini-2.5-flash'; 
+const GURL = k => `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${k}`;
+
+const CAT={
+  snc:{bg:'bg-purple-100',text:'text-purple-900',border:'border-purple-300',icon:'brain',
+    title:'Sistema Nervoso Centrale',desc:'Ansiolitici, Antidepressivi, Antipsicotici, Antiepilettici',
+    examples:'sertralina, aloperidolo, levodopa, diazepam, carbamazepina'},
+  cardio:{bg:'bg-rose-100',text:'text-rose-900',border:'border-rose-300',icon:'heart-pulse',
+    title:'Cardiovascolare',desc:'Antipertensivi, Antiaritmici, Anticoagulanti, Statine',
+    examples:'atorvastatina, metoprololo, amiodarone, warfarin, ramipril'},
+  resp:{bg:'bg-sky-100',text:'text-sky-900',border:'border-sky-300',icon:'wind',
+    title:'Respiratorio',desc:'Broncodilatatori, Corticosteroidi inalatori, Antiasmatici',
+    examples:'salbutamolo, salmeterolo, budesonide, tiotropio, montelukast'},
+  gastro:{bg:'bg-amber-100',text:'text-amber-900',border:'border-amber-300',icon:'coffee',
+    title:'Gastrointestinale',desc:'IPP, Antiemetici, Procinetici, Lassativi, IBD',
+    examples:'omeprazolo, metoclopramide, ondansetron, mesalazina'},
+  inf:{bg:'bg-teal-100',text:'text-teal-900',border:'border-teal-300',icon:'bug',
+    title:'Malattie Infettive',desc:'Antibiotici, Antivirali, Antimicotici, Antiparassitari',
+    examples:'amoxicillina, ciprofloxacina, vancomicina, fluconazolo'},
+  endo:{bg:'bg-pink-100',text:'text-pink-900',border:'border-pink-300',icon:'activity',
+    title:'Endocrino / Metabolico',desc:'Insuline, Ipoglicemizzanti orali, Ormoni tiroidei',
+    examples:'insulina glargine, metformina, levotiroxina, alendronato'},
+  immuno:{bg:'bg-indigo-100',text:'text-indigo-900',border:'border-indigo-300',icon:'shield',
+    title:'Immunitario',desc:'FANS, Corticosteroidi, DMARD, Biologici',
+    examples:'ibuprofene, metotressato, adalimumab, rituximab'},
+  onco:{bg:'bg-orange-100',text:'text-orange-900',border:'border-orange-300',icon:'dna',
+    title:'Oncologia',desc:'Chemioterapici, Target therapy, Immunoterapia',
+    examples:'cisplatino, paclitaxel, imatinib, trastuzumab, pembrolizumab'}
+};
+
+const S={
+  view:'home', apiKey:'',
+  numQ:10, cases:[], idx:0, chosen:null, score:0,
+  chatOpen:false, chatHist:[], chatBusy:false, loadMsg:'',
+  tab:'feedback', pathoLoading:false, reviewOpen:false
+};
+
+function md(t){
+  if(!t)return'';
+  return t
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/^### (.+)$/gm,'<h4 class="font-bold text-slate-800 mt-3 mb-1 text-[14px]">$1</h4>')
+    .replace(/^## (.+)$/gm,'<h3 class="font-bold text-slate-900 mt-3 mb-1 text-[15px]">$1</h3>')
+    .split(/\n{2,}/).map(p=>`<p>${p.replace(/\n/g,'<br>')}</p>`).join('');
+}
+
+function molImg(kw){
+  const s=encodeURIComponent((kw||'').trim());
+  const u=`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${s}/PNG?record_type=2d&image_size=large`;
+  return`<div class="relative w-full h-16 mt-2 bg-white rounded-lg overflow-hidden border border-slate-100 flex items-center justify-center">
+    <img src="${u}" alt="${kw}" loading="lazy"
+      class="w-full h-full object-contain p-1 absolute inset-0 z-10 opacity-0 transition-opacity duration-300"
+      onload="this.classList.remove('opacity-0');this.nextElementSibling.style.display='none';"
+      onerror="this.style.display='none';">
+    <div class="absolute inset-0 flex flex-col items-center justify-center text-slate-300 p-1 text-center">
+      <i data-lucide="hexagon" class="w-4 h-4 mb-1 opacity-40"></i>
+      <span class="text-[9px] font-bold leading-tight">${kw}</span>
+    </div>
+  </div>`;
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0, len = str.length; i < len; i++) {
+      let chr = str.charCodeAt(i);
+      hash = (hash << 5) - hash + chr;
+      hash |= 0; 
+  }
+  return hash.toString(36);
+}
+
+async function fetchWithRetry(url, options, retries = 5) {
+  const delays = [2000, 4000, 8000, 16000, 32000]; // Tempi di attesa più lunghi per evitare 429
+  for (let i = 0; i <= retries; i++) {
+    const res = await fetch(url, options);
+    if (res.status === 429) {
+      if (i < retries) {
+        console.warn(`Errore 429 (Limite API raggiunto). Attendo ${delays[i]}ms prima di riprovare...`);
+        await new Promise(r => setTimeout(r, delays[i]));
+        continue;
+      }
+    }
+    if (!res.ok) {
+      const e = await res.text();
+      throw new Error(`${res.status}: ${e}`);
+    }
+    return res.json();
+  }
+}
+
+async function geminiRaw(body, useCache = true){
+  const cacheKey = 'mbp_cache_' + hashString(JSON.stringify(body));
+  if (useCache) {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) return JSON.parse(cached);
+  }
+
+  const data = await fetchWithRetry(GURL(S.apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (useCache && text) {
+    try { localStorage.setItem(cacheKey, JSON.stringify(text)); } catch(e){}
+  }
+  return text;
+}
+
+async function geminiText(prompt, system=''){
+  return geminiRaw({
+    contents:[{parts:[{text:prompt}]}],
+    ...(system?{systemInstruction:{parts:[{text:system}]}}:{})
+  });
+}
+
+async function generateQuiz(){
+  if(!S.apiKey.trim()){alert('Inserisci prima la tua API Key Gemini.');return;}
+  const selKeys=Array.from(document.querySelectorAll('.cat-cb:checked')).map(cb=>cb.value);
+  if(!selKeys.length){alert('Seleziona almeno un sistema corporeo.');return;}
+
+  const numInput = parseInt(document.getElementById('num-select').value) || 10;
+  S.numQ = numInput;
+
+  S.view='loading';
+  S.loadMsg=`Generazione di ${S.numQ} scenari clinici (Fase 1/2)...`;
+  render();
+
+  const base=Math.floor(S.numQ/selKeys.length);
+  const remainder=S.numQ%selKeys.length;
+  let counts={};
+  selKeys.forEach((k,i)=>counts[k]=base+(i < remainder ? 1 : 0));
+
+  const distribLines=selKeys.map(k=>{
+    return `- Categoria "${CAT[k].title}" ("${k}") → ${counts[k]} casi. (Es. ${CAT[k].examples})`;
+  }).join('\n');
+  const allKeys=selKeys.map(k=>`"${k}"`).join(', ');
+
+  // PROMPT ALLEGGERITO: Niente spiegazioni lunghe qui per evitare overflow/429
+  const prompt=`Sei un docente di Farmacologia e Biochimica Clinica. Genera ESATTAMENTE ${S.numQ} casi clinici in formato JSON.
+
+━━━ DISTRIBUZIONE OBBLIGATORIA ━━━
+${distribLines}
+
+━━━ REGOLE DEL JSON DA PRODURRE ━━━
+1. "category": DEVE essere esattamente una tra ${allKeys}.
+2. "disease_name": Nome della patologia o del microrganismo (es. "Infarto STEMI", "Tubercolosi").
+3. "wiki_search_term": Termine esatto da cercare su Wikipedia per una FOTOGRAFIA o DIAGRAMMA della patologia (es. "Mycobacterium tuberculosis", "Elettrocardiogramma").
+4. "disease_context" (70-100 parole): Descrizione scientifica della patologia. Se batterio: morfologia/Gram/resistenze. Se tumore: pathway molecolari/recettori target. OBBLIGO: Spiega ogni tecnicismo o acronimo tra parentesi.
+5. "scenario" (6-8 righe): Il caso clinico con paziente, sintomi e quesito terapeutico.
+6. "options": ESATTAMENTE 6 opzioni (1 corretta, 5 trabocchetti). Formato: "NomeFarmaco (Classe Farmacologica)". Es: "Aspirina (FANS)".
+7. "correctAnswer": La stringa esatta della risposta corretta.`;
+
+  try{
+    const raw = await geminiRaw({
+      contents:[{parts:[{text:prompt}]}],
+      generationConfig:{
+        responseMimeType:'application/json',
+        responseSchema:{
+          type:'OBJECT',
+          properties:{
+            cases:{
+              type:'ARRAY',
+              items:{
+                type:'OBJECT',
+                properties:{
+                  category:{type:'STRING'},
+                  disease_name:{type:'STRING'},
+                  wiki_search_term:{type:'STRING'},
+                  disease_context:{type:'STRING'},
+                  scenario:{type:'STRING'},
+                  options:{type:'ARRAY',items:{type:'STRING'}},
+                  correctAnswer:{type:'STRING'}
+                },
+                required:['category','disease_name','wiki_search_term','disease_context','scenario','options','correctAnswer']
+              }
+            }
+          },
+          required:['cases']
+        }
+      }
+    }, false); // Nessuna cache qui
+
+    const jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+    const parsed = JSON.parse(jsonStr);
+
+    if(!parsed.cases?.length)throw new Error('Nessun caso generato');
+    const valid=parsed.cases.filter(c=>selKeys.includes(c.category));
+    
+    valid.forEach(c=>{
+      c.options=c.options.sort(()=>Math.random()-.5);
+      c.patho=null; 
+      c.wikiImageLoaded=false;
+      c.wikiImageLoading=false;
+      c.wikiImage=null;
+      // Campi per il lazy load
+      c.feedbackLoaded=false;
+      c.feedbackLoading=false;
+    });
+
+    S.cases=valid; S.idx=0; S.score=0; S.chosen=null;
+    S.chatHist=[]; S.chatOpen=false; S.tab='feedback'; S.reviewOpen=false;
+    S.view='quiz';
+  }catch(e){
+    console.error(e);
+    alert('Errore generazione: ' + e.message + '\n\nSe l\'errore è 429, attendi 1 minuto e riprova (limite Google API).');
+    S.view='home';
+  }
+  render(); window.scrollTo(0,0);
+}
+
+async function loadFeedbackForCase(c) {
+  if (c.feedbackLoaded || c.feedbackLoading) return;
+  
+  c.feedbackLoading = true;
+  render();
+
+  const trabocchetti = c.options.filter(o => o !== c.correctAnswer).join(', ');
+  
+  const prompt = `L'utente ha risposto al caso su "${c.disease_name}".
+Il farmaco corretto è: "${c.correctAnswer}".
+Le 5 opzioni errate (trabocchetti) erano: ${trabocchetti}.
+
+Fornisci il feedback didattico in formato JSON:
+1. "pubchem_keyword": Nome INN del farmaco corretto (una sola parola, SENZA classi o parentesi. Es: se era "Aspirina (FANS)", scrivi "Aspirin").
+2. "drug_wiki_search_term": Termine da cercare su Wikipedia per un'immagine del BERSAGLIO MOLECOLARE o MECCANISMO d'azione (es. "Cicloossigenasi", "Pompa sodio-potassio", "Ribosoma").
+3. "mech" (80-120 parole): Meccanismo d'azione dettagliato. Spiega ogni tecnicismo tra parentesi.
+4. "expl" (80-120 parole): Razionale clinico della scelta.
+5. "decoy_expl" (100-150 parole): Spiega con precisione perché ognuna delle 5 opzioni trabocchetto era errata o meno indicata.`;
+
+  try {
+    const raw = await geminiRaw({
+      contents:[{parts:[{text:prompt}]}],
+      generationConfig:{
+        responseMimeType:'application/json',
+        responseSchema:{
+          type:'OBJECT',
+          properties:{
+            pubchem_keyword:{type:'STRING'},
+            drug_wiki_search_term:{type:'STRING'},
+            mech:{type:'STRING'},
+            expl:{type:'STRING'},
+            decoy_expl:{type:'STRING'}
+          },
+          required:['pubchem_keyword','drug_wiki_search_term','mech','expl','decoy_expl']
+        }
+      }
+    }, true); // Possiamo usare la cache qui!
+
+    const jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+    const d = JSON.parse(jsonStr);
+
+    c.pubchem_keyword = d.pubchem_keyword;
+    c.drug_wiki_search_term = d.drug_wiki_search_term;
+    c.mech = d.mech;
+    c.expl = d.expl;
+    c.decoy_expl = d.decoy_expl;
+
+    // Carica immagine wiki del meccanismo
+    fetchWikiImage(c.drug_wiki_search_term).then(url => {
+      c.mechImage = url;
+      c.mechImageLoaded = true;
+      render();
+    });
+
+  } catch(e) {
+    console.error("Feedback error", e);
+    c.mech = "Errore nel caricamento del meccanismo.";
+    c.expl = "I server sono momentaneamente sovraccarichi.";
+    c.decoy_expl = "Prova ad attendere un momento e ricaricare.";
+  }
+
+  c.feedbackLoading = false;
+  c.feedbackLoaded = true;
+  render();
+}
+
+async function fetchWikiImage(term) {
+  if (!term) return null;
+  try {
+    const url = `https://it.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(term)}&prop=pageimages&format=json&pithumbsize=400&origin=*`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const pages = data.query.pages;
+    const pageId = Object.keys(pages)[0];
+    if (pageId !== "-1" && pages[pageId].thumbnail) {
+      return pages[pageId].thumbnail.source;
+    }
+  } catch(e) {}
+  return null;
+}
+
+function loadCaseData(c) {
+  // Carica immagine patologia
+  if (!c.wikiImageLoaded && !c.wikiImageLoading && c.wiki_search_term) {
+    c.wikiImageLoading = true;
+    fetchWikiImage(c.wiki_search_term).then(url => {
+      c.wikiImage = url;
+      c.wikiImageLoaded = true;
+      render();
+    });
+  }
+}
+
+async function loadPatho(idx){
+  const c=S.cases[idx];
+  if(c.patho)return; 
+  S.pathoLoading=true; render();
+
+  const svgPrompt=`Crea un diagramma SVG didattico e visivamente chiaro che illustra la fisiopatologia di "${c.disease_name}" o il meccanismo di "${c.correctAnswer}". 
+Requisiti SVG:
+- viewBox="0 0 600 350"
+- Sfondo bianco
+- Usa rettangoli arrotondati con colori pastello distinti per ogni elemento
+- Frecce chiare con marker arrowhead
+- Font sans-serif, testo leggibile ≥12px
+- Mostra almeno 3-5 step del pathway molecolare.
+- SOLO il codice SVG, niente markdown o testo.`;
+
+  try{
+    const svgRaw = await geminiText(svgPrompt);
+    const svgMatch = svgRaw.match(/<svg[\s\S]*<\/svg>/i);
+    c.patho = { svg: svgMatch ? svgMatch[0] : '<p class="text-red-500 text-[13px]">Impossibile generare diagramma.</p>' };
+  }catch(e){
+    c.patho = { svg: '<p class="text-red-500 text-[13px]">Errore: '+e.message+'</p>' };
+  }
+  S.pathoLoading=false; render();
+}
+
+async function sendChat(){
+  const inp=document.getElementById('chat-input');
+  const txt=inp.value.trim();
+  if(!txt||S.chatBusy)return;
+  const c=S.cases[S.idx];
+  S.chatHist.push({role:'user',text:txt});
+  inp.value='';S.chatBusy=true;render();scrollChat();
+  const hist=S.chatHist.slice(0,-1).map(m=>`${m.role==='user'?'Studente':'Tutor'}: ${m.text}`).join('\n');
+  
+  const system=`Sei un tutor di Farmacologia Clinica.
+Contesto: Patologia="${c.disease_name}" | Farmaco: ${c.correctAnswer}.
+Regole: Spiega pathway, linee guida e alternative. ⚠️ OBBLIGO: Spiega TUTTI i termini tecnici tra parentesi.`;
+  
+  try{
+    const reply=await geminiText(txt,system);
+    S.chatHist.push({role:'ai',text:reply});
+  }catch(e){
+    S.chatHist.push({role:'ai',text:'⚠️ Errore API: '+e.message});
+  }
+  S.chatBusy=false;render();scrollChat();
+}
+
+function pickAnswer(opt){
+  if(S.chosen)return;
+  S.chosen=opt;
+  if(opt===S.cases[S.idx].correctAnswer)S.score++;
+  S.tab='feedback';
+  render();
+  
+  // Triggera la generazione lazy del feedback
+  loadFeedbackForCase(S.cases[S.idx]);
+  
+  setTimeout(()=>document.getElementById('feedback')?.scrollIntoView({behavior:'smooth',block:'nearest'}),120);
+}
+
+function switchTab(t){
+  S.tab=t;
+  if(t==='patho')loadPatho(S.idx);
+  render();
+  setTimeout(()=>document.getElementById('feedback')?.scrollIntoView({behavior:'smooth',block:'start'}),80);
+}
+function goNext(){
+  if(S.idx < S.cases.length - 1){
+    S.idx++;S.chosen=null;S.chatOpen=false;S.chatHist=[];S.tab='feedback';
+    render();window.scrollTo({top:0,behavior:'smooth'});
+  }else{
+    S.view='results';S.chatOpen=false;
+    render();window.scrollTo({top:0,behavior:'smooth'});
+  }
+}
+function goHome(){S.view='home';render();window.scrollTo(0,0);}
+function toggleChat(){S.chatOpen=!S.chatOpen;render();if(S.chatOpen)scrollChat();}
+function scrollChat(){setTimeout(()=>{const el=document.getElementById('cs');if(el)el.scrollTop=el.scrollHeight;},80);}
+function chatEnter(e){if(e.key==='Enter')sendChat();}
+function toggleAll(){
+  const cbs=document.querySelectorAll('.cat-cb');
+  const anyChecked = Array.from(cbs).some(cb => cb.checked);
+  cbs.forEach(cb => cb.checked = !anyChecked);
+}
+function saveKey(){const k=document.getElementById('aki')?.value.trim();if(k){S.apiKey=k;localStorage.setItem('mbp_key',k);render();}}
+function openReview(){S.reviewOpen=true;render();}
+function closeReview(){S.reviewOpen=false;render();}
+function jumpTo(i){S.reviewOpen=false;S.idx=i;S.chosen=S.cases[i].chosen_answer;S.tab='feedback';render();window.scrollTo(0,0);}
+
+function renderHome(){
+  const saved=S.apiKey||localStorage.getItem('mbp_key')||'';
+  if(!S.apiKey&&saved)S.apiKey=saved;
+  const catsHTML=Object.entries(CAT).map(([k,t])=>`
+  <div class="relative">
+    <input type="checkbox" id="cat_${k}" value="${k}" class="cat-cb peer sr-only">
+    <label for="cat_${k}" class="flex items-center gap-3 p-3 border-2 ${t.border} ${t.bg} rounded-xl cursor-pointer">
+      <div class="w-10 h-10 rounded-lg bg-white/60 flex items-center justify-center shrink-0">
+        <i data-lucide="${t.icon}" class="w-5 h-5 ${t.text}"></i>
+      </div>
+      <div>
+        <div class="font-bold text-[14px] ${t.text} leading-tight">${t.title}</div>
+        <div class="text-[12px] text-slate-600 leading-snug mt-1">${t.desc}</div>
+      </div>
+    </label>
+  </div>`).join('');
+  
+  return`
+  <div class="p-4 sm:p-5 anim w-full flex-1">
+    <div class="text-center mb-6 mt-2">
+      <div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl shadow-lg mb-3 rotate-3">
+        <i data-lucide="dna" class="w-7 h-7 text-white"></i>
+      </div>
+      <h1 class="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight mb-1">MedBioChem <span class="text-indigo-600">PRO</span></h1>
+      <p class="text-[12px] text-slate-500 font-medium">Simulazione Clinica Farmacologica · Powered by Gemini AI</p>
+    </div>
+    <div class="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+      <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+        <h2 class="font-bold text-[13px] text-yellow-900 flex items-center gap-2 mb-1">
+          <i data-lucide="key" class="w-4 h-4 text-yellow-600"></i> Gemini API Key
+        </h2>
+        <p class="text-[12px] text-yellow-700 mb-2">Gratuita su <a href="https://aistudio.google.com/app/apikey" target="_blank" class="underline font-bold hover:text-yellow-900 transition-colors">aistudio.google.com</a> · salvata solo nel tuo browser.</p>
+        <div class="flex gap-2">
+          <input type="password" id="aki" value="${S.apiKey}" placeholder="AIza..."
+            class="flex-1 bg-white border border-yellow-300 focus:border-yellow-500 rounded-lg px-3 py-2 text-[13px] outline-none font-mono text-slate-700"/>
+          <button onclick="saveKey()" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold text-[13px] px-4 py-2 rounded-lg transition-colors">Salva</button>
+        </div>
+      </div>
+      
+      <div>
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="font-bold text-[14px] text-slate-700 flex items-center gap-2">
+            <i data-lucide="layers" class="w-4 h-4 text-indigo-500"></i> Seleziona Argomenti
+          </h2>
+          <button type="button" onclick="toggleAll()" class="text-[12px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-md hover:bg-indigo-100 transition-colors">
+            Seleziona/Deseleziona Tutto
+          </button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${catsHTML}</div>
+      </div>
+      
+      <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between gap-3">
+        <h2 class="font-bold text-[14px] text-slate-700 flex items-center gap-2 shrink-0">
+          <i data-lucide="hash" class="w-4 h-4 text-indigo-500"></i> Numero di Casi
+        </h2>
+        <div class="flex items-center gap-2">
+          <input type="number" id="num-select" value="10" min="1" max="100" 
+            class="w-20 bg-white border border-slate-200 p-2 text-[14px] rounded-lg font-bold text-center text-slate-800 outline-none focus:border-indigo-400">
+          <span class="text-[12px] text-slate-500 font-medium">casi</span>
+        </div>
+      </div>
+      
+      <button onclick="generateQuiz()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[14px] py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2">
+        <i data-lucide="play-circle" class="w-5 h-5"></i> Avvia Simulazione
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderLoading(){
+  return`
+  <div class="flex-1 flex flex-col items-center justify-center p-6 text-center min-h-[60vh] anim">
+    <div class="w-16 h-16 bg-indigo-500 rounded-full pulse mb-5 flex items-center justify-center">
+      <i data-lucide="flask-conical" class="w-8 h-8 text-white animate-pulse"></i>
+    </div>
+    <h2 class="text-[16px] font-bold text-slate-800 mb-2">Elaborazione in corso...</h2>
+    <p class="text-[13px] text-indigo-600 font-semibold bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100">${S.loadMsg}</p>
+  </div>`;
+}
+
+function renderQuiz(){
+  const c=S.cases[S.idx];
+  loadCaseData(c); 
+  
+  const th=CAT[c.category]||{bg:'bg-slate-100',text:'text-slate-800',border:'border-slate-200',icon:'file-text',title:'Generico'};
+  const answered=!!S.chosen;
+  const correct=S.chosen===c.correctAnswer;
+
+  const optsHTML=c.options.map(o=>{
+    let cls='bg-white border border-slate-200 text-slate-700 hover:border-indigo-300 shadow-sm cursor-pointer';
+    if(answered){
+      cls='bg-slate-50 border border-slate-200 text-slate-400 opacity-60 cursor-not-allowed';
+      if(o===c.correctAnswer)cls='bg-green-50 border-2 border-green-500 text-green-800 shadow-md opacity-100 font-bold';
+      else if(o===S.chosen) cls='bg-red-50 border-2 border-red-500 text-red-800 opacity-100 font-bold';
+    }
+    const esc=o.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const drugName = o.replace(/\s*\(.*?\)\s*/g, ''); // Rimuove parentesi della classe per mostrare l'immagine
+    
+    // Se c'è un feedback generato, usiamo la pubchem_keyword super precisa generata dall'IA
+    const chemSearch = (answered && c.pubchem_keyword && o===c.correctAnswer) ? c.pubchem_keyword : drugName;
+    
+    return`<button onclick="pickAnswer('${esc}')" ${answered?'disabled':''}
+      class="flex flex-col items-center p-3 sm:p-4 rounded-xl transition-all duration-150 text-center ${cls} min-h-[90px]">
+      <span class="text-[13px] sm:text-[14px] font-semibold leading-tight flex-1 flex items-center justify-center w-full mb-1">${o}</span>
+      ${molImg(chemSearch)}
+    </button>`;
+  }).join('');
+
+  // Immagine Wiki Patologia - Dimensioni compatte
+  let imageHTML = '';
+  if (c.wikiImage) {
+    imageHTML = `<img src="${c.wikiImage}" alt="${c.disease_name}" class="w-full max-w-[220px] mx-auto h-28 sm:h-36 object-cover rounded-xl mb-3 shadow-sm border border-slate-200">`;
+  }
+
+  let postHTML='';
+  if(answered){
+    const tabBar=`
+    <div class="flex gap-2 mb-4 overflow-x-auto scrollbar-hide">
+      <button onclick="switchTab('feedback')" class="tab-btn whitespace-nowrap ${S.tab==='feedback'?'active':''}">
+        <i data-lucide="check-circle" class="w-4 h-4 inline-block mr-1 -mt-0.5"></i>Spiegazione Farmaco
+      </button>
+      <button onclick="switchTab('patho')" class="tab-btn whitespace-nowrap ${S.tab==='patho'?'active':''}">
+        <i data-lucide="git-branch" class="w-4 h-4 inline-block mr-1 -mt-0.5"></i>Schema Pathway
+      </button>
+    </div>`;
+
+    let tabContent='';
+    if(S.tab==='feedback'){
+      if (c.feedbackLoading) {
+        tabContent=`<div class="flex flex-col items-center justify-center py-10 gap-3"><i data-lucide="loader-2" class="w-6 h-6 animate-spin text-indigo-500"></i><p class="text-[13px] text-slate-500 font-medium">L'IA sta elaborando la spiegazione del meccanismo e dei trabocchetti...</p></div>`;
+      } else if (c.feedbackLoaded) {
+        let mechImgTag = '';
+        if (c.mechImage) {
+          mechImgTag = `<img src="${c.mechImage}" alt="Meccanismo" class="w-full max-w-[200px] sm:max-w-[220px] mx-auto h-24 sm:h-32 object-cover rounded-xl mb-3 shadow-sm border border-slate-200">`;
+        }
+
+        tabContent=`
+        <div class="space-y-4">
+          <div class="bg-slate-50 p-4 rounded-xl border border-slate-100">
+            <h4 class="font-bold text-slate-700 text-[12px] uppercase tracking-wider mb-3 flex items-center gap-2">
+              <i data-lucide="microscope" class="w-4 h-4 text-indigo-500"></i> Meccanismo d'Azione
+            </h4>
+            ${mechImgTag}
+            <div class="text-[13px] text-slate-700 leading-relaxed rich">${md(c.mech)}</div>
+          </div>
+          <div class="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+            <h4 class="font-bold text-indigo-800 text-[12px] uppercase tracking-wider mb-2 flex items-center gap-2">
+              <i data-lucide="stethoscope" class="w-4 h-4 text-indigo-500"></i> Razionale Clinico
+            </h4>
+            <div class="text-[13px] text-indigo-900/90 leading-relaxed rich">${md(c.expl)}</div>
+          </div>
+          <div class="bg-orange-50 p-4 rounded-xl border border-orange-200">
+            <h4 class="font-bold text-orange-800 text-[12px] uppercase tracking-wider mb-2 flex items-center gap-2">
+              <i data-lucide="alert-triangle" class="w-4 h-4 text-orange-500"></i> Perché non le altre opzioni?
+            </h4>
+            <div class="text-[13px] text-orange-900/90 leading-relaxed rich">${md(c.decoy_expl)}</div>
+          </div>
+        </div>`;
+      }
+    } else if(S.tab==='patho'){
+      if(S.pathoLoading){
+        tabContent=`<div class="flex flex-col items-center justify-center py-8 gap-2"><i data-lucide="loader-2" class="w-6 h-6 animate-spin text-indigo-500"></i><p class="text-[13px] text-slate-500">Generazione schema in corso...</p></div>`;
+      } else {
+        tabContent=`
+        <div class="mb-4">
+          <h4 class="font-bold text-slate-700 text-[12px] uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i data-lucide="git-branch" class="w-4 h-4 text-indigo-500"></i> Pathway Molecolare
+          </h4>
+          <div class="schema-wrap">${c.patho.svg}</div>
+        </div>`;
+      }
+    }
+
+    const navBtns=`
+    <div class="flex flex-col sm:flex-row gap-3 pt-3 border-t border-slate-200 mt-5">
+      <button onclick="toggleChat()" class="w-full sm:w-1/3 bg-white border border-indigo-200 text-indigo-600 py-2.5 rounded-xl font-bold text-[13px] hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2">
+        <i data-lucide="message-circle-question" class="w-4 h-4"></i> Chiedi all'IA
+      </button>
+      <button onclick="goNext()" class="w-full sm:flex-1 bg-slate-800 text-white py-2.5 rounded-xl font-bold text-[13px] hover:bg-slate-700 transition-colors flex items-center justify-center gap-2 shadow-sm">
+        ${S.idx < S.cases.length - 1 ? 'Caso Successivo' : 'Fine Simulazione'}
+        <i data-lucide="arrow-right" class="w-4 h-4"></i>
+      </button>
+    </div>`;
+
+    postHTML=`
+    <div id="feedback" class="mt-6 bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden anim">
+      <div class="p-4 ${correct?'bg-green-100 text-green-900':'bg-red-100 text-red-900'} flex items-center gap-3 border-b ${correct?'border-green-200':'border-red-200'}">
+        <i data-lucide="${correct?'check-circle':'x-circle'}" class="w-6 h-6 shrink-0"></i>
+        <div>
+          <div class="font-bold text-[14px]">${correct?'✓ Risposta corretta!':'✗ Risposta errata'}</div>
+          ${!correct?`<div class="text-[12px] mt-0.5">Il farmaco corretto è <strong class="text-[13px]">${c.correctAnswer}</strong></div>`:''}
+        </div>
+      </div>
+      <div class="p-4 sm:p-5">
+        ${tabBar}
+        ${tabContent}
+        ${navBtns}
+      </div>
+    </div>`;
+  }
+
+  return`
+  <div class="${th.bg} ${th.text} px-4 sm:px-5 py-3 flex justify-between items-center sticky top-0 z-20 border-b ${th.border} shadow-sm">
+    <div class="flex items-center gap-2">
+      <i data-lucide="${th.icon}" class="w-5 h-5 opacity-80"></i>
+      <div>
+        <div class="text-[11px] uppercase font-bold opacity-70 tracking-wide">${th.title}</div>
+        <div class="font-bold text-[13px] leading-none mt-1">Paziente ${S.idx+1}</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="text-[12px] font-bold bg-white/50 border border-white/30 px-2.5 py-1 rounded-lg">${S.idx+1} di ${S.cases.length}</div>
+    </div>
+  </div>
+  
+  <div class="p-4 sm:p-5 w-full anim flex-1 max-w-4xl mx-auto">
+    
+    <!-- SCENARIO CLINICO (Domanda) -->
+    <div class="bg-slate-50 rounded-2xl p-4 sm:p-5 border border-slate-200 mb-5">
+      <h3 class="text-[14px] font-bold text-slate-800 mb-2 flex items-center gap-2">
+        <i data-lucide="user" class="text-slate-500 w-4 h-4"></i> Scenario Clinico
+      </h3>
+      <p class="text-[13px] sm:text-[14px] font-medium text-slate-800 leading-relaxed">${c.scenario}</p>
+    </div>
+
+    <!-- CONTESTO PATOLOGIA E IMMAGINE (Tra domanda e risposta) -->
+    <div class="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200 mb-5 border-l-4 border-l-indigo-500">
+      <h2 class="text-[14px] sm:text-[15px] font-bold text-slate-800 mb-3 flex items-center gap-2">
+        <i data-lucide="book-open" class="text-indigo-500 w-4 h-4"></i> Contesto Scientifico: ${c.disease_name}
+      </h2>
+      ${imageHTML}
+      <div class="text-[13px] text-slate-600 leading-relaxed rich">
+        ${md(c.disease_context)}
+      </div>
+    </div>
+
+    <!-- OPZIONI (6 scelte a griglia) -->
+    <h3 class="text-[12px] font-bold text-slate-500 uppercase tracking-widest mb-3 ml-1">Quale farmaco scegli?</h3>
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">${optsHTML}</div>
+    
+    ${postHTML}
+  </div>`;
+}
+
+function renderResults(){
+  const pct=Math.round((S.score/S.cases.length)*100);
+  const col=pct>=60?'text-emerald-600':pct>=40?'text-amber-500':'text-red-500';
+  const msg=pct>=80?'🏆 Eccellente!':pct>=60?'👍 Buon lavoro!':pct>=40?'📚 Studia ancora un po\'!':'🔄 Riprova — serve più pratica.';
+
+  return`
+  <div class="flex-1 flex flex-col items-center justify-center p-5 anim">
+    <div class="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200 text-center w-full max-w-lg">
+      <i data-lucide="award" class="w-12 h-12 mx-auto mb-4 ${col}"></i>
+      <h2 class="text-2xl font-black text-slate-800 mb-2">Simulazione Completata</h2>
+      <p class="text-[14px] text-slate-500 mb-6">${msg}</p>
+      <div class="flex justify-center gap-4 mb-6">
+        <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex-1">
+          <div class="text-3xl font-bold text-indigo-600 mb-1">${S.score}<span class="text-lg text-slate-400">/${S.cases.length}</span></div>
+          <div class="text-[11px] uppercase font-bold text-slate-500">Corrette</div>
+        </div>
+        <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex-1">
+          <div class="text-3xl font-bold ${col} mb-1">${pct}%</div>
+          <div class="text-[11px] uppercase font-bold text-slate-500">Precisione</div>
+        </div>
+      </div>
+      <div class="flex flex-col gap-3">
+        <button onclick="openReview()" class="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold text-[14px] hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 shadow-sm">
+          <i data-lucide="list-checks" class="w-4 h-4"></i> Rivedi Tutti i Casi
+        </button>
+        <button onclick="goHome()" class="w-full bg-slate-800 text-white py-3 rounded-xl font-bold text-[14px] hover:bg-slate-700 transition-colors flex items-center justify-center gap-2">
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i> Nuova Sessione
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderReview(){
+  if(!S.reviewOpen)return'';
+  const rows=S.cases.map((c,i)=>{
+    const th=CAT[c.category]||{bg:'bg-slate-100',text:'text-slate-700',border:'border-slate-200',title:'—'};
+    const ok=c.chosen_answer===c.correctAnswer;
+    return`
+    <div class="bg-white border border-slate-200 rounded-xl p-4 anim" style="animation-delay:${i*0.03}s">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-[10px] font-bold ${th.text} ${th.bg} px-2 py-0.5 rounded-md uppercase tracking-wider">${th.title}</span>
+        <button onclick="jumpTo(${i})" class="text-[12px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg">Rivedi →</button>
+      </div>
+      <p class="text-[12px] text-slate-600 mb-2 line-clamp-2">${c.scenario}</p>
+      <div class="flex gap-3">
+        <div><span class="text-[10px] font-bold text-slate-400">TUA RISPOSTA</span><br><span class="text-[12px] font-bold ${ok?'text-green-600':'text-red-500'}">${c.chosen_answer||'—'}</span></div>
+        ${!ok?`<div><span class="text-[10px] font-bold text-slate-400">CORRETTA</span><br><span class="text-[12px] font-bold text-green-600">${c.correctAnswer}</span></div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return`
+  <div class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex flex-col p-3 sm:p-6 anim">
+    <div class="bg-white w-full h-full flex flex-col max-w-2xl mx-auto rounded-2xl shadow-2xl overflow-hidden">
+      <div class="bg-indigo-600 px-5 py-4 flex justify-between items-center">
+        <h2 class="font-bold text-white text-[16px]">Revisione Casi</h2>
+        <button onclick="closeReview()" class="text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50">${rows}</div>
+    </div>
+  </div>`;
+}
+
+function renderChat(){
+  if(!S.chatOpen)return'';
+  const msgs=S.chatHist.map(m=>`
+  <div class="flex ${m.role==='user'?'justify-end':'justify-start'} mb-3 anim">
+    <div class="p-3 rounded-xl max-w-[85%] text-[13px] leading-relaxed shadow-sm ${m.role==='user'?'bg-indigo-600 text-white rounded-tr-none':'bg-white border border-slate-200 text-slate-700 rounded-tl-none rich'}">
+      ${m.role==='user'?m.text:md(m.text)}
+    </div>
+  </div>`).join('');
+  const typing=S.chatBusy?`<div class="flex justify-start mb-3"><div class="bg-white border border-slate-200 p-3 rounded-xl rounded-tl-none shadow-sm flex items-center gap-2"><i data-lucide="loader-2" class="w-4 h-4 animate-spin text-indigo-500"></i><span class="text-[12px] font-semibold text-slate-400">Elaborazione...</span></div></div>`:'';
+  
+  return`
+  <div class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex flex-col justify-end p-2 sm:p-4 anim">
+    <div class="bg-slate-50 w-full max-w-2xl mx-auto rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col h-[85vh] overflow-hidden border border-slate-200">
+      <div class="bg-white px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+        <div class="flex items-center gap-2">
+          <i data-lucide="bot" class="w-5 h-5 text-indigo-600"></i>
+          <div class="font-bold text-[14px] text-slate-800">Tutor IA Farmacologia</div>
+        </div>
+        <button onclick="toggleChat()" class="text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div id="cs" class="flex-1 overflow-y-auto p-4">${msgs}${typing}</div>
+      <div class="bg-white p-3 border-t border-slate-200">
+        <div class="flex gap-2">
+          <input type="text" id="chat-input" onkeypress="chatEnter(event)" placeholder="Scrivi qui la tua domanda..." class="flex-1 bg-slate-100 border border-slate-200 focus:border-indigo-400 rounded-xl px-4 py-2 text-[13px] outline-none text-slate-800"/>
+          <button onclick="sendChat()" ${S.chatBusy?'disabled':''} class="bg-indigo-600 text-white w-12 rounded-xl hover:bg-indigo-700 flex items-center justify-center disabled:opacity-50"><i data-lucide="send" class="w-4 h-4"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+const _pickAnswer=pickAnswer;
+pickAnswer=function(opt){
+  if(S.chosen)return;
+  S.cases[S.idx].chosen_answer=opt;
+  _pickAnswer(opt);
+};
+
+function render(){
+  const root=document.getElementById('app');
+  let html='';
+  if(S.view==='home')    html=renderHome();
+  else if(S.view==='loading') html=renderLoading();
+  else if(S.view==='quiz')    html=renderQuiz();
+  else if(S.view==='results') html=renderResults();
+  html+=renderReview();
+  html+=renderChat();
+  root.innerHTML=html;
+  if(window.lucide)lucide.createIcons();
+}
+
+document.addEventListener('DOMContentLoaded',render);
+</script>
+</body>
+</html>
