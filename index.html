@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedBioChem PRO - Generatore Dinamico</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0e7ff 100%);
+            min-height: 100vh;
+        }
+
+        @keyframes slideUpFade {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-enter {
+            animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(99, 102, 241, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        }
+        .loading-ring { animation: pulse-ring 2s infinite; }
+
+        /* Custom Checkbox Styling per maggiore vivacità */
+        .cat-checkbox:checked + label {
+            background: linear-gradient(135deg, #4f46e5, #6366f1);
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.3);
+            transform: translateY(-2px);
+        }
+        .cat-checkbox:checked + label .icon-box {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white !important;
+        }
+        .cat-checkbox:checked + label .desc-text {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="text-slate-800 pb-20 w-full overflow-x-hidden selection:bg-indigo-300 selection:text-indigo-900">
+
+    <div id="app" class="w-full min-h-screen flex flex-col"></div>
+
+    <script>
+        // --- API KEY (Fornita dall'ambiente di esecuzione, DEVE rimanere vuota) ---
+        const apiKey = "";
+
+        // --- TASSONOMIA COLORATA E VIBRANTE ---
+        const categoryThemes = {
+            'snc': { 
+                gradient: 'from-purple-600 to-violet-500', bg: 'bg-violet-100', text: 'text-violet-900', border: 'border-violet-200', icon: 'brain', 
+                title: 'Sistema Nervoso Centrale', desc: 'Ansiolitici, Antidepressivi, Antipsicotici...' 
+            },
+            'cardio': { 
+                gradient: 'from-red-600 to-rose-500', bg: 'bg-rose-100', text: 'text-rose-900', border: 'border-rose-200', icon: 'heart-pulse', 
+                title: 'Cardiovascolare', desc: 'Ipertensivi, Aritmici, Coagulanti...' 
+            },
+            'resp': { 
+                gradient: 'from-sky-500 to-blue-500', bg: 'bg-sky-100', text: 'text-sky-900', border: 'border-sky-200', icon: 'wind', 
+                title: 'Respiratorio', desc: 'Broncodilatatori, Corticosteroidi inalatori...' 
+            },
+            'gastro': { 
+                gradient: 'from-orange-500 to-amber-500', bg: 'bg-amber-100', text: 'text-amber-900', border: 'border-amber-200', icon: 'coffee', 
+                title: 'Gastrointestinale', desc: 'Antiacidi, Inibitori pompa, Antiemetici...' 
+            },
+            'inf': { 
+                gradient: 'from-emerald-500 to-teal-500', bg: 'bg-emerald-100', text: 'text-emerald-900', border: 'border-emerald-200', icon: 'bug', 
+                title: 'Malattie Infettive', desc: 'Antibiotici, Antivirali, Antimicotici...' 
+            },
+            'endo': { 
+                gradient: 'from-pink-500 to-fuchsia-500', bg: 'bg-pink-100', text: 'text-pink-900', border: 'border-pink-200', icon: 'activity', 
+                title: 'Endocrino / Metabolico', desc: 'Ipoglicemizzanti, Ormoni tiroidei...' 
+            },
+            'immuno': { 
+                gradient: 'from-slate-700 to-slate-600', bg: 'bg-slate-200', text: 'text-slate-900', border: 'border-slate-300', icon: 'shield', 
+                title: 'Immunitario', desc: 'FANS, Corticosteroidi, Immunosoppressori...' 
+            },
+            'onco': { 
+                gradient: 'from-red-800 to-rose-700', bg: 'bg-red-100', text: 'text-red-900', border: 'border-red-200', icon: 'dna', 
+                title: 'Oncologia', desc: 'Chemioterapici, Target therapy, MABs...' 
+            }
+        };
+
+        // --- STATO ---
+        const state = { 
+            view: 'home', 
+            numQuestions: 10, 
+            activeCases: [], 
+            currentIndex: 0, 
+            selectedOption: null, 
+            score: 0, 
+            chatVisible: false, 
+            chatHistory: [], 
+            chatTyping: false,
+            loadingMessage: ''
+        };
+
+        // --- FETCH CON EXPONENTIAL BACKOFF ---
+        async function fetchWithBackoff(payload, isChat = false) {
+            const maxRetries = 5;
+            const delays = [1000, 2000, 4000, 8000, 16000];
+            
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    return await response.json();
+                } catch (e) {
+                    if (i === maxRetries - 1) throw e;
+                    if (!isChat) {
+                        state.loadingMessage = `Connessione disturbata. Ritentativo ${i+1} in corso...`;
+                        render();
+                    }
+                    await new Promise(r => setTimeout(r, delays[i]));
+                }
+            }
+        }
+
+        // --- GENERATORE IA ---
+        async function generateQuiz() {
+            const checkedBoxes = Array.from(document.querySelectorAll('.cat-checkbox:checked'));
+            const selectedKeys = checkedBoxes.map(cb => cb.value);
+            
+            if (selectedKeys.length === 0) {
+                alert("Seleziona almeno una categoria medica.");
+                return;
+            }
+
+            state.numQuestions = parseInt(document.getElementById('num-select').value);
+            state.view = 'loading';
+            state.loadingMessage = `Elaborazione di ${state.numQuestions} casi clinici...`;
+            render();
+
+            const selectedTitles = selectedKeys.map(k => categoryThemes[k].title);
+            
+            const prompt = `Sei un esperto di Farmacologia. Genera ESATTAMENTE ${state.numQuestions} casi clinici.
+Categorie: ${selectedTitles.join(', ')}.
+
+REGOLE FONDAMENTALI:
+1. Devi restituire SOLO un array JSON valido. Nessun testo prima, nessun testo dopo. Nessun blocco markdown (\`\`\`json).
+2. I casi devono essere dettagliati, chiari e con termini medici precisi.
+
+Struttura JSON per ogni oggetto:
+{
+  "category": "Una tra: ${selectedKeys.join(', ')}",
+  "scenario": "Paziente di 55 anni si presenta con...",
+  "options": ["Farmaco Errato 1", "Farmaco Corretto", "Farmaco Errato 2", "Farmaco Errato 3"],
+  "correctAnswer": "Farmaco Corretto",
+  "pubchem_keyword": "Nome del principio attivo in inglese (es. Ibuprofen)",
+  "tag": "Classe (es. Inibitore ACE)",
+  "mech": "Meccanismo d'azione spiegato chiaramente",
+  "expl": "Perché questo farmaco è corretto e gli altri no."
+}`;
+
+            const payload = { 
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: "application/json" }
+            };
+
+            try {
+                const data = await fetchWithBackoff(payload);
+                let jsonString = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                
+                if (!jsonString) throw new Error("Risposta vuota");
+
+                // Pulizia forte del JSON (rimuove eventuali markdown inseriti dall'IA)
+                jsonString = jsonString.replace(/```json/gi, '').replace(/```/g, '').trim();
+                const generatedCases = JSON.parse(jsonString);
+
+                if (!Array.isArray(generatedCases) || generatedCases.length === 0) {
+                    throw new Error("Formato JSON non valido");
+                }
+
+                // Mescola opzioni
+                generatedCases.forEach(c => {
+                    c.options = c.options.sort(() => Math.random() - 0.5);
+                });
+
+                state.activeCases = generatedCases;
+                state.currentIndex = 0;
+                state.score = 0;
+                state.selectedOption = null;
+                state.chatHistory = [];
+                state.chatVisible = false;
+                state.view = 'quiz';
+
+            } catch (e) {
+                console.error("Errore:", e);
+                alert("Si è verificato un errore durante la generazione. I server IA potrebbero essere sovraccarichi. Riprova tra poco.");
+                state.view = 'home';
+            }
+            render();
+            window.scrollTo(0,0);
+        }
+
+        // --- COMPONENTI UI ---
+
+        function renderHome() {
+            const catHTML = Object.entries(categoryThemes).map(([k, t]) => `
+                <div class="relative w-full">
+                    <input type="checkbox" id="cat_${k}" value="${k}" class="cat-checkbox peer sr-only" checked>
+                    <label for="cat_${k}" class="flex items-center gap-4 p-5 bg-white border-2 border-slate-100 rounded-2xl cursor-pointer transition-all duration-300 hover:shadow-lg h-full">
+                        <div class="icon-box w-12 h-12 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center shrink-0 transition-colors">
+                            <i data-lucide="${t.icon}" class="w-6 h-6"></i>
+                        </div>
+                        <div class="flex flex-col">
+                            <span class="font-bold text-lg leading-tight mb-1">${t.title}</span>
+                            <span class="desc-text text-sm text-slate-500 leading-snug">${t.desc}</span>
+                        </div>
+                    </label>
+                </div>
+            `).join('');
+
+            return `
+            <div class="max-w-5xl mx-auto p-4 sm:p-8 animate-enter flex-1 w-full">
+                <div class="text-center mb-12 mt-8">
+                    <div class="inline-flex items-center justify-center w-24 h-24 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-[2rem] shadow-2xl shadow-indigo-500/30 mb-6 transform rotate-3 hover:rotate-6 transition-transform">
+                        <i data-lucide="dna" class="w-12 h-12 text-white"></i>
+                    </div>
+                    <h1 class="text-5xl md:text-6xl font-black text-slate-900 tracking-tight mb-4">MedBioChem <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">PRO</span></h1>
+                    <p class="text-lg text-slate-600 font-semibold max-w-2xl mx-auto">Configura la tua simulazione clinica e metti alla prova le tue conoscenze farmacologiche.</p>
+                </div>
+                
+                <div class="bg-white/80 backdrop-blur-xl p-6 sm:p-10 rounded-[2.5rem] shadow-2xl border border-white flex flex-col gap-10">
+                    
+                    <div>
+                        <div class="flex justify-between items-center mb-6">
+                            <h2 class="font-black text-2xl text-slate-800 flex items-center gap-2"><i data-lucide="layers" class="text-indigo-500"></i> Sistemi Corporei</h2>
+                            <button onclick="document.querySelectorAll('.cat-checkbox').forEach(cb => cb.checked = true)" class="text-sm font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-4 py-2 rounded-xl transition-colors">Seleziona Tutto</button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            ${catHTML}
+                        </div>
+                    </div>
+                    
+                    <div class="bg-indigo-50/50 p-6 sm:p-8 rounded-3xl border border-indigo-100">
+                        <h2 class="font-black text-2xl text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="hash" class="text-indigo-500"></i> Numero di Casi</h2>
+                        <select id="num-select" class="w-full bg-white border-2 border-indigo-100 p-5 rounded-2xl font-bold text-xl text-indigo-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all shadow-sm cursor-pointer">
+                            <option value="5">Breve - 5 Casi</option>
+                            <option value="10" selected>Standard - 10 Casi</option>
+                            <option value="20">Esteso - 20 Casi</option>
+                        </select>
+                    </div>
+                    
+                    <button onclick="generateQuiz()" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-black text-2xl py-6 rounded-3xl shadow-xl shadow-indigo-500/30 transition-all transform hover:-translate-y-1 flex items-center justify-center gap-4">
+                        <i data-lucide="play-circle" class="w-8 h-8"></i> Avvia Simulazione
+                    </button>
+                </div>
+            </div>`;
+        }
+
+        function renderLoading() {
+            return `
+            <div class="flex-1 flex flex-col items-center justify-center p-6 text-center animate-enter min-h-[80vh]">
+                <div class="relative w-32 h-32 mb-8 flex items-center justify-center">
+                    <div class="absolute inset-0 bg-indigo-500 rounded-full loading-ring opacity-20"></div>
+                    <div class="bg-white w-24 h-24 rounded-full shadow-2xl flex items-center justify-center z-10">
+                        <i data-lucide="flask-conical" class="w-12 h-12 text-indigo-600 animate-pulse"></i>
+                    </div>
+                </div>
+                <h2 class="text-3xl font-black text-slate-800 mb-4">Generazione in corso...</h2>
+                <p class="text-lg text-indigo-600 font-semibold max-w-md bg-white px-6 py-3 rounded-2xl shadow-sm border border-indigo-50">
+                    ${state.loadingMessage}
+                </p>
+            </div>`;
+        }
+
+        // Funzione robusta per l'immagine. Usa un trucco CSS per nascondere l'immagine se fallisce e mostrare l'icona
+        function getMoleculeHTML(keyword) {
+            if (!keyword) keyword = "Sconosciuto";
+            const safeKeyword = encodeURIComponent(keyword.trim());
+            const imgUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${safeKeyword}/PNG?record_type=2d&image_size=large`;
+            
+            return `
+            <div class="relative w-full h-32 bg-slate-50 rounded-xl overflow-hidden border border-slate-200 flex items-center justify-center group">
+                <!-- Immagine (se carica, nasconde il fallback) -->
+                <img src="${imgUrl}" 
+                     alt="${keyword}"
+                     class="w-full h-full object-contain p-2 absolute inset-0 z-10 transition-opacity duration-300 opacity-0 bg-white"
+                     onload="this.classList.remove('opacity-0'); this.nextElementSibling.style.display='none';"
+                     onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                
+                <!-- Fallback Icona (visibile di default, nascosto se l'img carica) -->
+                <div class="fallback-ui absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-2 text-center bg-slate-50 z-0">
+                    <i data-lucide="hexagon" class="w-10 h-10 mb-2 opacity-50 group-hover:text-indigo-400 transition-colors"></i>
+                    <span class="text-xs font-bold leading-tight break-words w-full px-2 text-slate-500">${keyword}</span>
+                </div>
+            </div>`;
+        }
+
+        function renderQuiz() {
+            const c = state.activeCases[state.currentIndex];
+            const theme = categoryThemes[c.category] || categoryThemes['onco']; 
+            
+            const hasAnswered = !!state.selectedOption;
+            const isCorrect = state.selectedOption === c.correctAnswer;
+
+            const optsHTML = c.options.map(o => {
+                let btnClass = "bg-white border-2 border-slate-200 text-slate-700 hover:border-indigo-400 hover:shadow-lg shadow-sm cursor-pointer";
+                
+                if (hasAnswered) {
+                    btnClass = "bg-slate-50 border-2 border-slate-200 text-slate-400 opacity-60 cursor-not-allowed";
+                    if (o === c.correctAnswer) {
+                        // Risposta esatta: Verde vibrante, ombra, ingrandito
+                        btnClass = "bg-green-50 border-2 border-green-500 text-green-900 shadow-xl shadow-green-500/20 scale-105 z-10 opacity-100 ring-4 ring-green-100";
+                    } else if (o === state.selectedOption) {
+                        // Risposta sbagliata selezionata: Rosso
+                        btnClass = "bg-red-50 border-2 border-red-500 text-red-900 opacity-100";
+                    }
+                }
+
+                return `
+                <button onclick="selectAnswer('${o.replace(/'/g, "\\'")}')" ${hasAnswered ? 'disabled' : ''} 
+                        class="flex flex-col items-center p-5 rounded-2xl transition-all duration-300 text-center ${btnClass} min-h-[220px]">
+                    <span class="font-black text-lg leading-tight mb-4 flex-1 flex items-center justify-center w-full">${o}</span>
+                    ${getMoleculeHTML(o === c.correctAnswer ? c.pubchem_keyword : o)}
+                </button>`;
+            }).join('');
+
+            const feedbackHTML = hasAnswered ? `
+                <div id="feedback" class="mt-12 bg-white rounded-[2.5rem] shadow-2xl border-4 ${isCorrect ? 'border-green-400' : 'border-red-400'} overflow-hidden animate-enter">
+                    <div class="p-8 ${isCorrect ? 'bg-green-500 text-white' : 'bg-red-500 text-white'} flex items-center gap-6">
+                        <div class="bg-white/20 p-4 rounded-full shrink-0">
+                            <i data-lucide="${isCorrect ? 'check-circle' : 'x-circle'}" class="w-12 h-12 text-white"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-black text-3xl mb-1">${isCorrect ? 'Esatto!' : 'Scelta Errata'}</h3>
+                            ${!isCorrect ? `<p class="text-lg font-bold bg-white/20 inline-block px-4 py-1 rounded-xl mt-2">La risposta corretta era: <strong>${c.correctAnswer}</strong></p>` : ''}
+                        </div>
+                    </div>
+                    
+                    <div class="p-8 sm:p-10 space-y-8">
+                        <div class="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                            <h4 class="font-black text-slate-800 text-sm uppercase tracking-widest flex items-center gap-2 mb-3"><i data-lucide="microscope" class="text-indigo-500"></i> Meccanismo d'Azione</h4>
+                            <p class="text-lg text-slate-700 leading-relaxed">${c.mech}</p>
+                        </div>
+                        
+                        <div class="bg-indigo-50 p-6 rounded-2xl border border-indigo-100">
+                            <h4 class="font-black text-indigo-900 text-sm uppercase tracking-widest flex items-center gap-2 mb-3"><i data-lucide="info" class="text-indigo-500"></i> Spiegazione Clinica</h4>
+                            <p class="text-lg text-indigo-800 leading-relaxed">${c.expl}</p>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row gap-4 pt-6 border-t border-slate-100">
+                            <button onclick="toggleChat()" class="w-full sm:w-1/2 bg-white border-2 border-indigo-200 text-indigo-700 py-5 rounded-2xl font-bold text-lg hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2 shadow-sm">
+                                <i data-lucide="message-circle-question"></i> Chiedi all'IA
+                            </button>
+                            <button onclick="goNext()" class="w-full sm:w-1/2 bg-gradient-to-r ${theme.gradient} text-white py-5 rounded-2xl font-bold text-lg hover:shadow-lg transition-all flex items-center justify-center gap-2">
+                                ${state.currentIndex < state.activeCases.length - 1 ? 'Prossimo Paziente' : 'Vedi Risultati'} <i data-lucide="arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>` : '';
+
+            return `
+            <div class="bg-gradient-to-r ${theme.gradient} text-white p-5 shadow-lg flex justify-between items-center sticky top-0 z-20 w-full">
+                <div class="flex items-center gap-4">
+                    <div class="bg-white/20 p-3 rounded-xl backdrop-blur"><i data-lucide="${theme.icon}" class="w-6 h-6"></i></div>
+                    <div>
+                        <div class="text-xs uppercase tracking-widest font-bold opacity-80">${theme.title}</div>
+                        <div class="font-black text-xl leading-none mt-1">Caso Clinico</div>
+                    </div>
+                </div>
+                <div class="bg-black/20 px-5 py-2 rounded-xl text-sm font-black tracking-widest shadow-inner border border-white/10">
+                    ${state.currentIndex + 1} / ${state.activeCases.length}
+                </div>
+            </div>
+
+            <div class="max-w-5xl mx-auto p-4 sm:p-8 w-full animate-enter flex-1">
+                
+                <div class="bg-white rounded-[2rem] p-8 sm:p-12 shadow-xl border border-slate-100 mb-10 relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-2 h-full bg-gradient-to-b ${theme.gradient}"></div>
+                    <span class="inline-block bg-slate-100 text-slate-600 font-bold px-4 py-1.5 rounded-lg text-sm mb-6 border border-slate-200">${c.tag}</span>
+                    <h2 class="text-2xl sm:text-3xl font-bold text-slate-800 leading-relaxed">${c.scenario}</h2>
+                </div>
+
+                <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-3 ml-2">
+                    <div class="p-2 bg-indigo-100 rounded-lg"><i data-lucide="pill" class="text-indigo-600"></i></div>
+                    Quale trattamento prescrivi?
+                </h3>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    ${optsHTML}
+                </div>
+                
+                ${feedbackHTML}
+            </div>`;
+        }
+
+        function renderResults() {
+            const pct = Math.round((state.score / state.numQuestions) * 100);
+            let message = "Ottimo lavoro!";
+            let icon = "award";
+            let color = "text-green-500";
+            
+            if (pct < 60) {
+                message = "C'è spazio per migliorare.";
+                icon = "book-open";
+                color = "text-amber-500";
+            }
+
+            return `
+            <div class="flex-1 flex flex-col items-center justify-center p-6 animate-enter min-h-screen">
+                <div class="bg-white p-10 sm:p-16 rounded-[3rem] shadow-2xl border border-slate-100 text-center max-w-2xl w-full">
+                    <i data-lucide="${icon}" class="w-24 h-24 mx-auto mb-6 ${color}"></i>
+                    <h2 class="text-5xl font-black text-slate-900 mb-2">Simulazione Conclusa</h2>
+                    <p class="text-xl text-slate-500 font-bold mb-10">${message}</p>
+                    
+                    <div class="flex flex-col sm:flex-row justify-center gap-8 mb-12">
+                        <div class="bg-slate-50 p-8 rounded-3xl border border-slate-200 flex-1">
+                            <div class="text-6xl font-black text-indigo-600 mb-2">${state.score}<span class="text-3xl text-slate-400">/${state.numQuestions}</span></div>
+                            <div class="text-sm uppercase tracking-widest font-bold text-slate-500">Punteggio</div>
+                        </div>
+                        <div class="bg-slate-50 p-8 rounded-3xl border border-slate-200 flex-1">
+                            <div class="text-6xl font-black ${color} mb-2">${pct}%</div>
+                            <div class="text-sm uppercase tracking-widest font-bold text-slate-500">Accuratezza</div>
+                        </div>
+                    </div>
+                    
+                    <button onclick="goHome()" class="w-full bg-slate-900 text-white py-6 rounded-2xl font-black text-xl hover:bg-indigo-600 transition-colors flex items-center justify-center gap-3">
+                        <i data-lucide="rotate-ccw"></i> Inizia Nuova Sessione
+                    </button>
+                </div>
+            </div>`;
+        }
+
+        function renderChat() {
+            if(!state.chatVisible) return '';
+            
+            const msgHTML = state.chatHistory.map(m => `
+                <div class="flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-enter mb-6">
+                    <div class="p-5 rounded-3xl max-w-[85%] text-lg shadow-sm font-medium ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm'}">
+                        ${m.text.replace(/\n/g, '<br/>')}
+                    </div>
+                </div>
+            `).join('');
+
+            const typeHTML = state.chatTyping ? `
+                <div class="flex justify-start animate-enter mb-6">
+                    <div class="bg-white border border-slate-200 p-5 rounded-3xl rounded-tl-sm shadow-sm flex items-center gap-3">
+                        <i data-lucide="loader-2" class="w-6 h-6 animate-spin text-indigo-600"></i>
+                        <span class="text-sm font-bold text-slate-400">L'IA sta scrivendo...</span>
+                    </div>
+                </div>` : '';
+
+            return `
+            <div class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex flex-col justify-end p-2 sm:p-6 animate-enter">
+                <div class="bg-slate-50 w-full max-w-4xl mx-auto rounded-[2rem] shadow-2xl flex flex-col h-[85vh] overflow-hidden border border-slate-200">
+                    
+                    <div class="bg-white p-6 border-b border-slate-200 flex justify-between items-center z-10 shadow-sm">
+                        <div class="flex items-center gap-4">
+                            <div class="bg-indigo-100 p-3 rounded-xl"><i data-lucide="bot" class="w-8 h-8 text-indigo-700"></i></div>
+                            <div>
+                                <h3 class="font-black text-xl text-slate-900">Assistente MedBioChem</h3>
+                                <p class="text-sm text-slate-500 font-semibold">Chiedi chiarimenti sul caso clinico</p>
+                            </div>
+                        </div>
+                        <button onclick="toggleChat()" class="bg-slate-100 hover:bg-slate-200 p-3 rounded-full text-slate-600 transition-colors">
+                            <i data-lucide="x" class="w-6 h-6"></i>
+                        </button>
+                    </div>
+                    
+                    <div id="chat-scroll" class="flex-1 overflow-y-auto p-6 bg-slate-50 scrollbar-hide">
+                        <div class="flex justify-start mb-6">
+                            <div class="bg-white border border-slate-200 p-6 rounded-3xl rounded-tl-sm max-w-[85%] text-lg shadow-sm text-slate-700 font-medium">
+                                Ciao! Sono qui per aiutarti a capire meglio questo caso clinico. Hai dubbi sul meccanismo d'azione o sulle alternative terapeutiche?
+                            </div>
+                        </div>
+                        ${msgHTML}
+                        ${typeHTML}
+                    </div>
+
+                    <div class="bg-white p-6 border-t border-slate-200">
+                        <div class="flex gap-4">
+                            <input type="text" id="chat-input" onkeypress="chatEnter(event)" placeholder="Scrivi la tua domanda qui..." 
+                                   class="flex-1 bg-slate-100 border-2 border-transparent focus:border-indigo-500 rounded-2xl px-6 py-4 text-lg outline-none transition-all text-slate-800 placeholder:text-slate-400" />
+                            <button onclick="sendChat()" ${state.chatTyping ? 'disabled' : ''} 
+                                    class="bg-indigo-600 text-white w-16 h-16 rounded-2xl disabled:opacity-50 hover:bg-indigo-700 transition-colors shadow-lg flex items-center justify-center shrink-0">
+                                <i data-lucide="send" class="w-7 h-7"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        // --- HANDLERS ---
+        function selectAnswer(opt) {
+            if (state.selectedOption) return;
+            state.selectedOption = opt;
+            if (opt === state.activeCases[state.currentIndex].correctAnswer) state.score++;
+            render();
+            setTimeout(() => document.getElementById('feedback')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+        }
+
+        function goNext() {
+            if (state.currentIndex < state.activeCases.length - 1) {
+                state.currentIndex++;
+                state.selectedOption = null;
+                state.chatVisible = false;
+                state.chatHistory = [];
+                render();
+                window.scrollTo({top:0, behavior:'smooth'});
+            } else {
+                state.view = 'results';
+                state.chatVisible = false;
+                render();
+                window.scrollTo({top:0, behavior:'smooth'});
+            }
+        }
+
+        function goHome() { state.view = 'home'; render(); window.scrollTo(0,0); }
+        function toggleChat() { state.chatVisible = !state.chatVisible; render(); if(state.chatVisible) scrollToChatBottom(); }
+        function scrollToChatBottom() { setTimeout(() => { const el = document.getElementById('chat-scroll'); if(el) el.scrollTop = el.scrollHeight; }, 100); }
+        function chatEnter(e) { if(e.key === 'Enter') sendChat(); }
+
+        async function sendChat() {
+            const input = document.getElementById('chat-input');
+            const txt = input.value.trim();
+            if (!txt || state.chatTyping) return;
+            
+            state.chatHistory.push({ role: 'user', text: txt });
+            input.value = '';
+            state.chatTyping = true;
+            render();
+            scrollToChatBottom();
+
+            const c = state.activeCases[state.currentIndex];
+            const ctx = `Caso in esame: ${c.scenario}. Farmaco corretto: ${c.correctAnswer}.`;
+
+            // Qui è stata inserita l'istruzione personalizzata
+            const prompt = `Sei un tutor medico. Contesto: ${ctx}.
+REGOLA FONDAMENTALE E ASSOLUTA: Se non sai qualcosa, non inventare una risposta: scrivi semplicemente "questo non lo so". Non aggiungere altre parole se non sai la risposta. Rispondi in modo conciso e chiaro in italiano.`;
+
+            const payload = { 
+                contents: [{ parts: [{ text: txt }] }], 
+                systemInstruction: { parts: [{ text: prompt }] } 
+            };
+            
+            try {
+                const data = await fetchWithBackoff(payload, true);
+                const resText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Errore di risposta.";
+                state.chatHistory.push({ role: 'ai', text: resText });
+            } catch(e) {
+                state.chatHistory.push({ role: 'ai', text: "Errore di connessione al server IA." });
+            }
+
+            state.chatTyping = false;
+            render();
+            scrollToChatBottom();
+        }
+
+        // --- RENDERER PRINCIPALE ---
+        function render() {
+            const root = document.getElementById('app');
+            let html = '';
+            if (state.view === 'home') html = renderHome();
+            else if (state.view === 'loading') html = renderLoading();
+            else if (state.view === 'quiz') html = renderQuiz();
+            else if (state.view === 'results') html = renderResults();
+            
+            html += renderChat();
+            root.innerHTML = html;
+            
+            // Inizializza icone Lucide dopo ogni aggiornamento del DOM
+            if (window.lucide) {
+                lucide.createIcons();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', render);
+    </script>
+</body>
+</html>
